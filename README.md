@@ -13,6 +13,11 @@ chmod +x create-vm.sh
 ./create-vm.sh
 ```
 
+or no install run(easier):
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/E-VDV-HU/azure-vm-bootstrap/main/create-vm.sh)
+```
+
 ## Features
 
 The script:
