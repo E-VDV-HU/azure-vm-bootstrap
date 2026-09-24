@@ -5,7 +5,7 @@ AI-generated with ChatGPT (GPT-5.6 Luna).
 A Bash-based Azure VM provisioning script designed for Azure CLI and Azure Cloud Shell. It interactively asks for the VM name, Linux username, and password, then handles region restrictions, VM SKU availability, quota errors, deployment validation, networking, and cleanup.
 
 ## TL;DR
-quick install on cloudshell:
+Quick install on cloudshell:
 ```bash
 git clone https://github.com/E-VDV-HU/azure-vm-bootstrap.git
 cd azure-vm-bootstrap
