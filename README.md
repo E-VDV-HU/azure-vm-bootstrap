@@ -6,12 +6,12 @@ A Bash-based Azure VM provisioning script designed for Azure CLI and Azure Cloud
 
 ## tl;dr
 quick install on cloudshell:
-''
+```bash
 git clone https://github.com/E-VDV-HU/azure-vm-bootstrap.git
 cd azure-vm-bootstrap
 chmod +x create-vm.sh
 ./create-vm.sh
-''
+```
 
 ## Features
 
