@@ -10,25 +10,26 @@
 #
 # Features:
 #   - Prompts for VM name
+#   - Retries invalid VM names
 #   - Prompts for Linux username
 #   - Prompts for password securely
-#   - Allows retrying invalid VM names
-#   - Allows retrying invalid passwords
+#   - Retries invalid passwords
+#   - Explains that password input is invisible
 #   - Detects the active Azure subscription
 #   - Detects subscription-specific allowed regions
 #   - Validates VM deployments before creating them
 #   - Tries multiple small VM sizes
 #   - Handles quota/SKU/capacity failures
 #   - Creates networking automatically
-#   - Opens SSH
+#   - Uses Standard SSD for the OS disk
 #   - Cleans failed deployments asynchronously
 #   - Removes previous resource groups created by this script
-#   - Uses Standard SSD managed OS disks
 # ============================================================
 
 set -u
 set -o pipefail
 
+VM_NAME=""
 USERNAME=""
 PASSWORD=""
 PASSWORD_CONFIRM=""
@@ -41,7 +42,15 @@ cleanup() {
     unset PASSWORD PASSWORD_CONFIRM
 }
 
-trap cleanup EXIT INT TERM
+handle_signal() {
+    cleanup
+    echo
+    echo "[INFO] Script interrupted."
+    exit 130
+}
+
+trap cleanup EXIT
+trap handle_signal INT TERM
 
 # ------------------------------------------------------------
 # Output helpers
@@ -72,9 +81,6 @@ success() {
 command -v az >/dev/null 2>&1 \
     || die "Azure CLI is not installed."
 
-command -v python3 >/dev/null 2>&1 \
-    || die "Python 3 is required."
-
 # ------------------------------------------------------------
 # Header
 # ------------------------------------------------------------
@@ -91,22 +97,27 @@ echo
 # ------------------------------------------------------------
 
 while true; do
-    read -r -p "VM name: " VM_NAME
+    if ! read -r -p "VM name: " VM_NAME; then
+        die "Input was closed."
+    fi
 
     if [ -z "$VM_NAME" ]; then
-        warn "VM name cannot be empty. Please try again."
+        warn "VM name cannot be empty."
+        echo "Please try again."
         echo
         continue
     fi
 
     if ! [[ "$VM_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?$ ]]; then
         warn "VM name must be 1-64 characters and contain only letters, numbers and hyphens."
+        echo "Please try again."
         echo
         continue
     fi
 
     if [ "${#VM_NAME}" -gt 50 ]; then
         warn "VM name must be 50 characters or fewer for this script."
+        echo "Please try again."
         echo
         continue
     fi
@@ -118,10 +129,13 @@ done
 # Linux username
 # ------------------------------------------------------------
 
-read -r -p "Username: " USERNAME
+if ! read -r -p "Username: " USERNAME; then
+    die "Input was closed."
+fi
 
-[ -n "$USERNAME" ] \
-    || die "Username cannot be empty."
+if [ -z "$USERNAME" ]; then
+    die "Username cannot be empty."
+fi
 
 if ! [[ "$USERNAME" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,31}$ ]]; then
     die "Username must be 1-32 characters and use letters, numbers, underscores or hyphens."
@@ -138,53 +152,70 @@ esac
 # Password
 # ------------------------------------------------------------
 #
-# Password input is hidden. Nothing will appear in the
-# terminal while typing, including characters or asterisks.
+# Password input is hidden.
+# Nothing will appear while typing, including asterisks.
 # ------------------------------------------------------------
 
 while true; do
+
     echo
-    echo "Password input is hidden: nothing will appear while you type."
+    echo "Password input is invisible."
+    echo "Nothing will appear in the terminal while you type."
     echo
 
-    read -r -s -p "Password: " PASSWORD
+    PASSWORD=""
+    PASSWORD_CONFIRM=""
+
+    if ! read -r -s -p "Password: " PASSWORD; then
+        die "Password input was closed."
+    fi
     printf '\n'
 
-    read -r -s -p "Confirm password: " PASSWORD_CONFIRM
+    if ! read -r -s -p "Confirm password: " PASSWORD_CONFIRM; then
+        die "Password confirmation input was closed."
+    fi
     printf '\n'
 
     if [ "$PASSWORD" != "$PASSWORD_CONFIRM" ]; then
-        warn "Passwords do not match. Please try again."
-        unset PASSWORD PASSWORD_CONFIRM
+        warn "Passwords do not match."
+        echo "Please try again."
         continue
     fi
 
     PASSWORD_LENGTH=${#PASSWORD}
 
     if [ "$PASSWORD_LENGTH" -lt 12 ] || [ "$PASSWORD_LENGTH" -gt 123 ]; then
-        warn "Password must be 12-123 characters. Please try again."
-        unset PASSWORD PASSWORD_CONFIRM
+        warn "Password must be 12-123 characters."
+        echo "Please try again."
         continue
     fi
 
     COMPLEXITY=0
 
-    [[ "$PASSWORD" =~ [a-z] ]] \
-        && COMPLEXITY=$((COMPLEXITY + 1))
+    if [[ "$PASSWORD" =~ [a-z] ]]; then
+        COMPLEXITY=$((COMPLEXITY + 1))
+    fi
 
-    [[ "$PASSWORD" =~ [A-Z] ]] \
-        && COMPLEXITY=$((COMPLEXITY + 1))
+    if [[ "$PASSWORD" =~ [A-Z] ]]; then
+        COMPLEXITY=$((COMPLEXITY + 1))
+    fi
 
-    [[ "$PASSWORD" =~ [0-9] ]] \
-        && COMPLEXITY=$((COMPLEXITY + 1))
+    if [[ "$PASSWORD" =~ [0-9] ]]; then
+        COMPLEXITY=$((COMPLEXITY + 1))
+    fi
 
-    [[ "$PASSWORD" =~ [^a-zA-Z0-9] ]] \
-        && COMPLEXITY=$((COMPLEXITY + 1))
+    if [[ "$PASSWORD" =~ [^a-zA-Z0-9] ]]; then
+        COMPLEXITY=$((COMPLEXITY + 1))
+    fi
 
     if [ "$COMPLEXITY" -lt 3 ]; then
-        warn "Password must contain at least 3 of: lowercase, uppercase, digit, special character."
+        warn "Password must contain at least 3 of:"
+        echo "  - lowercase letter"
+        echo "  - uppercase letter"
+        echo "  - digit"
+        echo "  - special character"
+        echo
         echo "Please try again."
-        unset PASSWORD PASSWORD_CONFIRM
         continue
     fi
 
@@ -199,19 +230,31 @@ echo
 
 info "Checking active Azure subscription..."
 
-SUBSCRIPTION_ID=$(
+if ! SUBSCRIPTION_ID=$(
     az account show \
         --query id \
         -o tsv \
         2>/dev/null
-) || die "No active Azure subscription."
+); then
+    die "No active Azure subscription."
+fi
 
-SUBSCRIPTION_NAME=$(
+if [ -z "$SUBSCRIPTION_ID" ]; then
+    die "Azure returned an empty subscription ID."
+fi
+
+if ! SUBSCRIPTION_NAME=$(
     az account show \
         --query name \
         -o tsv \
         2>/dev/null
-) || die "Unable to read Azure subscription."
+); then
+    die "Unable to read Azure subscription."
+fi
+
+if [ -z "$SUBSCRIPTION_NAME" ]; then
+    die "Azure returned an empty subscription name."
+fi
 
 echo
 echo "Subscription:"
@@ -221,6 +264,7 @@ echo
 echo "VM:"
 echo "  Name: $VM_NAME"
 echo "  User: $USERNAME"
+echo "  Disk: StandardSSD_LRS"
 
 # ------------------------------------------------------------
 # Discover region policy
@@ -230,6 +274,8 @@ echo
 
 info "Checking subscription region policy..."
 
+POLICY_STATUS=0
+
 REGIONS=$(
     az policy assignment list \
         --scope "/subscriptions/$SUBSCRIPTION_ID" \
@@ -237,7 +283,11 @@ REGIONS=$(
         --query "[?displayName=='Allowed resource deployment regions'].parameters.listOfAllowedLocations.value[]" \
         -o tsv \
         2>/dev/null
-)
+) || POLICY_STATUS=$?
+
+if [ "$POLICY_STATUS" -ne 0 ]; then
+    die "Unable to read Azure Policy assignments for this subscription."
+fi
 
 # ------------------------------------------------------------
 # Fallback when no explicit regional policy exists
@@ -262,12 +312,14 @@ if [ -z "$REGIONS" ]; then
         italynorth
     )
 
-    AVAILABLE_REGIONS=$(
+    if ! AVAILABLE_REGIONS=$(
         az account list-locations \
             --query "[].name" \
             -o tsv \
             2>/dev/null
-    ) || die "Unable to retrieve Azure regions."
+    ); then
+        die "Unable to retrieve Azure regions."
+    fi
 
     REGIONS=""
 
@@ -436,7 +488,7 @@ while IFS= read -r REGION; do
 
         RG_STATUS=$?
 
-        if [ $RG_STATUS -ne 0 ]; then
+        if [ "$RG_STATUS" -ne 0 ]; then
 
             warn "Resource group creation failed."
 
@@ -451,15 +503,10 @@ while IFS= read -r REGION; do
         # Preflight validation
         # ----------------------------------------------------
         #
-        # This catches:
-        #   - Azure Policy blocks
-        #   - unavailable SKUs
-        #   - quota problems
-        #   - invalid VM configuration
+        # --validate generates and validates the deployment
+        # without creating the VM.
         #
-        # It does not guarantee actual capacity.
-        # Azure capacity can still change between validation
-        # and the actual deployment.
+        # StandardSSD_LRS is explicitly assigned to the OS disk.
         # ----------------------------------------------------
 
         info "Validating VM deployment..."
@@ -471,7 +518,7 @@ while IFS= read -r REGION; do
                 --location "$REGION" \
                 --size "$SIZE" \
                 --image Ubuntu2404 \
-                --os-disk-sku StandardSSD_LRS \
+                --storage-sku os=StandardSSD_LRS \
                 --admin-username "$USERNAME" \
                 --admin-password "$PASSWORD" \
                 --authentication-type password \
@@ -484,7 +531,7 @@ while IFS= read -r REGION; do
 
         VALIDATE_STATUS=$?
 
-        if [ $VALIDATE_STATUS -ne 0 ]; then
+        if [ "$VALIDATE_STATUS" -ne 0 ]; then
 
             if printf '%s\n' "$VALIDATE_RESULT" |
                 grep -q "RequestDisallowedByAzure"; then
@@ -538,7 +585,7 @@ while IFS= read -r REGION; do
                 --location "$REGION" \
                 --size "$SIZE" \
                 --image Ubuntu2404 \
-                --os-disk-sku StandardSSD_LRS \
+                --storage-sku os=StandardSSD_LRS \
                 --admin-username "$USERNAME" \
                 --admin-password "$PASSWORD" \
                 --authentication-type password \
@@ -554,7 +601,7 @@ while IFS= read -r REGION; do
         # Success
         # ----------------------------------------------------
 
-        if [ $CREATE_STATUS -eq 0 ]; then
+        if [ "$CREATE_STATUS" -eq 0 ]; then
 
             SUCCESS=1
 
@@ -562,30 +609,28 @@ while IFS= read -r REGION; do
             SUCCESS_REGION="$REGION"
             SUCCESS_SIZE="$SIZE"
 
+            # Get the actual public IP from Azure instead of
+            # parsing mixed stdout/stderr from az vm create.
             SUCCESS_IP=$(
-                printf '%s\n' "$CREATE_RESULT" |
-                    python3 -c '
-import json
-import sys
-
-try:
-    data = json.load(sys.stdin)
-    print(data.get("publicIpAddress", ""))
-except Exception:
-    print("")
-'
+                az vm show \
+                    --resource-group "$SUCCESS_RG" \
+                    --name "$VM_NAME" \
+                    --show-details \
+                    --query publicIps \
+                    -o tsv \
+                    2>/dev/null || true
             )
+
+            if [ -z "$SUCCESS_IP" ]; then
+                warn "VM was created, but its public IP could not be retrieved automatically."
+            fi
 
             success "VM created successfully."
 
             # ------------------------------------------------
             # Expand SSH source to all IPv4 addresses.
             #
-            # az vm create --nsg-rule SSH may create a rule
-            # restricted to the current client address.
-            #
-            # We reproduce the setup used in the manual
-            # deployment by changing it to 0.0.0.0/0.
+            # This intentionally exposes SSH on the Internet.
             # ------------------------------------------------
 
             NIC_ID=$(
@@ -673,6 +718,7 @@ except Exception:
                 grep -E \
                     "Code:|Message:|code|message|AllocationFailed|QuotaExceeded|SkuNotAvailable|RequestDisallowedByAzure" |
                 head -20
+
         fi
 
         # ----------------------------------------------------
@@ -745,12 +791,19 @@ echo "Resource group:"
 echo "$SUCCESS_RG"
 echo
 echo "SSH:"
-echo "ssh $USERNAME@$SUCCESS_IP"
+if [ -n "$SUCCESS_IP" ]; then
+    echo "ssh $USERNAME@$SUCCESS_IP"
+else
+    echo "Public IP unavailable. Retrieve it with:"
+    echo "az vm show -g \"$SUCCESS_RG\" -n \"$VM_NAME\" --show-details --query publicIps -o tsv"
+fi
+
 echo
 echo "Resources:"
 az resource list \
     --resource-group "$SUCCESS_RG" \
     --query "[].{Name:name,Type:type,Location:location}" \
     -o table
+
 echo
 success "Deployment complete."
