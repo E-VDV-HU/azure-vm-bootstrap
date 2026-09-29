@@ -21,6 +21,7 @@
 #   - Opens SSH
 #   - Cleans failed deployments asynchronously
 #   - Removes previous resource groups created by this script
+#   - Uses Standard SSD managed OS disks
 # ============================================================
 
 set -u
@@ -384,6 +385,7 @@ while IFS= read -r REGION; do
         echo "Region:  $REGION"
         echo "Size:    $SIZE"
         echo "RG:      $ATTEMPT_RG"
+        echo "Disk:    StandardSSD_LRS"
         echo "============================================================"
 
         # ----------------------------------------------------
@@ -441,6 +443,7 @@ while IFS= read -r REGION; do
                 --location "$REGION" \
                 --size "$SIZE" \
                 --image Ubuntu2404 \
+                --os-disk-sku StandardSSD_LRS \
                 --admin-username "$USERNAME" \
                 --admin-password "$PASSWORD" \
                 --authentication-type password \
@@ -507,6 +510,7 @@ while IFS= read -r REGION; do
                 --location "$REGION" \
                 --size "$SIZE" \
                 --image Ubuntu2404 \
+                --os-disk-sku StandardSSD_LRS \
                 --admin-username "$USERNAME" \
                 --admin-password "$PASSWORD" \
                 --authentication-type password \
@@ -711,17 +715,14 @@ az vm show \
 echo
 echo "Resource group:"
 echo "$SUCCESS_RG"
-
 echo
 echo "SSH:"
 echo "ssh $USERNAME@$SUCCESS_IP"
-
 echo
 echo "Resources:"
 az resource list \
     --resource-group "$SUCCESS_RG" \
     --query "[].{Name:name,Type:type,Location:location}" \
     -o table
-
 echo
 success "Deployment complete."
