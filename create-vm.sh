@@ -12,6 +12,8 @@
 #   - Prompts for VM name
 #   - Prompts for Linux username
 #   - Prompts for password securely
+#   - Allows retrying invalid VM names
+#   - Allows retrying invalid passwords
 #   - Detects the active Azure subscription
 #   - Detects subscription-specific allowed regions
 #   - Validates VM deployments before creating them
@@ -88,19 +90,29 @@ echo
 # VM name
 # ------------------------------------------------------------
 
-read -r -p "VM name: " VM_NAME
+while true; do
+    read -r -p "VM name: " VM_NAME
 
-[ -n "$VM_NAME" ] \
-    || die "VM name cannot be empty."
+    if [ -z "$VM_NAME" ]; then
+        warn "VM name cannot be empty. Please try again."
+        echo
+        continue
+    fi
 
-if ! [[ "$VM_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?$ ]]; then
-    die "VM name must be 1-64 characters and contain only letters, numbers and hyphens."
-fi
+    if ! [[ "$VM_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?$ ]]; then
+        warn "VM name must be 1-64 characters and contain only letters, numbers and hyphens."
+        echo
+        continue
+    fi
 
-# Keep resource names manageable.
-if [ "${#VM_NAME}" -gt 50 ]; then
-    die "VM name must be 50 characters or fewer for this script."
-fi
+    if [ "${#VM_NAME}" -gt 50 ]; then
+        warn "VM name must be 50 characters or fewer for this script."
+        echo
+        continue
+    fi
+
+    break
+done
 
 # ------------------------------------------------------------
 # Linux username
@@ -125,43 +137,59 @@ esac
 # ------------------------------------------------------------
 # Password
 # ------------------------------------------------------------
+#
+# Password input is hidden. Nothing will appear in the
+# terminal while typing, including characters or asterisks.
+# ------------------------------------------------------------
 
-echo
+while true; do
+    echo
+    echo "Password input is hidden: nothing will appear while you type."
+    echo
 
-read -r -s -p "Password: " PASSWORD
-printf '\n'
+    read -r -s -p "Password: " PASSWORD
+    printf '\n'
 
-read -r -s -p "Confirm password: " PASSWORD_CONFIRM
-printf '\n'
+    read -r -s -p "Confirm password: " PASSWORD_CONFIRM
+    printf '\n'
 
-[ "$PASSWORD" = "$PASSWORD_CONFIRM" ] \
-    || die "Passwords do not match."
+    if [ "$PASSWORD" != "$PASSWORD_CONFIRM" ]; then
+        warn "Passwords do not match. Please try again."
+        unset PASSWORD PASSWORD_CONFIRM
+        continue
+    fi
 
-PASSWORD_LENGTH=${#PASSWORD}
+    PASSWORD_LENGTH=${#PASSWORD}
 
-# Azure CLI Linux password requirements:
-# 12-123 characters and 3 of 4 complexity categories.
-if [ "$PASSWORD_LENGTH" -lt 12 ] || [ "$PASSWORD_LENGTH" -gt 123 ]; then
-    die "Password must be 12-123 characters."
-fi
+    if [ "$PASSWORD_LENGTH" -lt 12 ] || [ "$PASSWORD_LENGTH" -gt 123 ]; then
+        warn "Password must be 12-123 characters. Please try again."
+        unset PASSWORD PASSWORD_CONFIRM
+        continue
+    fi
 
-COMPLEXITY=0
+    COMPLEXITY=0
 
-[[ "$PASSWORD" =~ [a-z] ]] \
-    && COMPLEXITY=$((COMPLEXITY + 1))
+    [[ "$PASSWORD" =~ [a-z] ]] \
+        && COMPLEXITY=$((COMPLEXITY + 1))
 
-[[ "$PASSWORD" =~ [A-Z] ]] \
-    && COMPLEXITY=$((COMPLEXITY + 1))
+    [[ "$PASSWORD" =~ [A-Z] ]] \
+        && COMPLEXITY=$((COMPLEXITY + 1))
 
-[[ "$PASSWORD" =~ [0-9] ]] \
-    && COMPLEXITY=$((COMPLEXITY + 1))
+    [[ "$PASSWORD" =~ [0-9] ]] \
+        && COMPLEXITY=$((COMPLEXITY + 1))
 
-[[ "$PASSWORD" =~ [^a-zA-Z0-9] ]] \
-    && COMPLEXITY=$((COMPLEXITY + 1))
+    [[ "$PASSWORD" =~ [^a-zA-Z0-9] ]] \
+        && COMPLEXITY=$((COMPLEXITY + 1))
 
-if [ "$COMPLEXITY" -lt 3 ]; then
-    die "Password must contain at least 3 of: lowercase, uppercase, digit, special character."
-fi
+    if [ "$COMPLEXITY" -lt 3 ]; then
+        warn "Password must contain at least 3 of: lowercase, uppercase, digit, special character."
+        echo "Please try again."
+        unset PASSWORD PASSWORD_CONFIRM
+        continue
+    fi
+
+    break
+done
 
 # ------------------------------------------------------------
 # Azure subscription
